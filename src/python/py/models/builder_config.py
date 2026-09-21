@@ -402,10 +402,8 @@ def normalize_drafter_quant_config(
         },
     }
     quant_config = QuantConfig.from_dict(merge_objects(defaults, canonical))
-    if drafter_type in ("dflash2", "dspark") and quant_config.io_dtype != "bf16":
-        raise ValueError(
-            f"{drafter_type} body io_dtype must be bf16 because its activations can exceed the fp16 range"
-        )
+    if drafter_type == "dspark" and quant_config.io_dtype != "bf16":
+        raise ValueError("dspark body io_dtype must be bf16 because its activations can exceed the fp16 range")
     if drafter_type == "mtp" and quant_config.io_dtype != target_io_dtype:
         # The MTP graph consumes the decoder hidden state directly; no exporter converts it.
         raise ValueError(
@@ -435,8 +433,17 @@ def normalize_drafter_quant_config(
             raise ValueError("DFlash2 integer weights.block_size must be one of 16, 32, 64, 128, or 256")
         if quant_config.weights.method != "default" or not quant_config.weights.symmetric:
             raise ValueError("DFlash2 supports only symmetric DEFAULT integer weight quantization")
-        if quant_config.format.use_qdq or quant_config.format.matmulnbits_weights_prepacked != 0:
-            raise ValueError("DFlash2 body weights require raw QOperator format")
+        if quant_config.format.use_qdq:
+            raise ValueError("DFlash2 body weights require QOperator format")
+        prepack = quant_config.format.matmulnbits_weights_prepacked
+        if prepack and quant_config.weights.type == "none":
+            raise ValueError("DFlash2 offline prepacking requires integer weights")
+        if prepack == 2 and quant_config.weights.type == "int2":
+            raise ValueError("DFlash2 INT2 weights support only the SM80 prepacked layout")
+        if prepack and quant_config.weights.type == "int2" and quant_config.weights.block_size not in (64, 128):
+            raise ValueError("DFlash2 INT2 offline prepacking requires weights.block_size=64 or 128")
+        if prepack and quant_config.weights.type in ("int4", "int8") and quant_config.weights.block_size not in (32, 64, 128):
+            raise ValueError("DFlash2 INT4/INT8 offline prepacking requires weights.block_size=32, 64, or 128")
     if quant_config.moe.type != "none":
         raise ValueError(f"{drafter_type} does not support MoE expert quantization")
     if execution_provider != "cuda" and quant_config.format.matmulnbits_weights_prepacked:
